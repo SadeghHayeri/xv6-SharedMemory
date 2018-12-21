@@ -6,6 +6,52 @@
 #include "mmu.h"
 #include "proc.h"
 #include "elf.h"
+#include <stddef.h>
+#include "spinlock.h"
+
+
+///////// shared memory /////////
+
+struct shm_page {
+    uint id;
+    char* frame;
+    int ref_cnt;
+    int owner_pid;
+    int flags;
+};
+
+struct _shm_table {
+    struct spinlock lock;
+    struct shm_page* shm_list;
+} shm_table;
+
+void
+shm_init() {
+    initlock(&shm_table.lock, "shared memory");
+    shm_table.shm_pages = NULL;
+}
+
+int
+shm_open(int id, int page_count, int flags) {
+    acquire(&(shm_table.lock));
+
+    // your code
+
+    release(&(shm_table.lock));
+    return 0; // decide what to return
+}
+
+int
+shm_close(int id) {
+    acquire(&(shm_table.lock));
+
+    // your code
+
+    release(&(shm_table.lock));
+    return 0; // decide what to return
+}
+
+/////////////////////////////////
 
 extern char data[];  // defined by kernel.ld
 pde_t *kpgdir;  // for use in scheduler()
