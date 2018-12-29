@@ -89,3 +89,30 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+
+int
+sys_shm_open(void)
+{
+  int id, page_count, flags;
+  argint(0, &id);
+  argint(1, &page_count);
+  argint(2, &flags);
+  return shm_open(id, page_count, flags);
+}
+
+int
+sys_shm_attach(void)
+{
+  int id;
+  argint(0, &id);
+  return shm_attach(id);
+}
+
+int
+sys_shm_close(void)
+{
+  int id;
+  argint(0, &id);
+  return shm_close(id);
+}

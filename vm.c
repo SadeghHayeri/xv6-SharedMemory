@@ -9,49 +9,164 @@
 #include <stddef.h>
 #include "spinlock.h"
 
+///////////////////////////////////
+#define SHM_COUNT 64
+#define MAX_PAGE_PER_SHM 100
 
-///////// shared memory /////////
+#define NOT_FOUND -1
+#define TOO_MANY_PAGE_REQUESTED -2
+#define ALREADY_OPEN -3
+#define ACCESS_DENIED -4
+#define BAD_ALLOC -5
+#define SUCCESS 0
 
-struct shm_page {
-    uint id;
-    char* frame;
-    int ref_cnt;
-    int owner_pid;
-    int flags;
-};
+#define IS_FOUND(x) ((x) != NOT_FOUND)
 
-struct _shm_table {
+struct {
     struct spinlock lock;
-    struct shm_page* shm_list;
+    struct shm_info {
+        int used;
+        int id;
+        int owner_pid;
+        uint flags;
+        int refcnt;
+        int size;
+
+        char *frame[MAX_PAGE_PER_SHM];
+    } shm_information[SHM_COUNT];
 } shm_table;
+
+static int mappages(pde_t *pgdir, void *va, uint size, uint pa, int perm);
+
+void
+clear_page(int index) {
+  shm_table.shm_information[index].used = 0;
+  shm_table.shm_information[index].id = -1;
+  shm_table.shm_information[index].owner_pid = -1;
+  shm_table.shm_information[index].flags = 0b0;
+  shm_table.shm_information[index].refcnt = 0;
+  shm_table.shm_information[index].size = 0;
+  for(int i = 0; i < MAX_PAGE_PER_SHM; i++)
+    shm_table.shm_information[index].frame[i] = NULL;
+}
 
 void
 shm_init() {
-    initlock(&shm_table.lock, "shared memory");
-    shm_table.shm_pages = NULL;
+  initlock(&shm_table.lock, "shared memory");
+  acquire(&(shm_table.lock));
+  for (int i = 0; i < SHM_COUNT; i++)
+    clear_page(i);
+  release(&(shm_table.lock));
+}
+
+int find_page(int id) {
+  for(int i = 0; i < SHM_COUNT; i++)
+    if (shm_table.shm_information[i].id == id)
+      return i;
+  return NOT_FOUND;
+}
+
+int find_free_page() {
+  for(int i = 0; i < SHM_COUNT; i++)
+    if(shm_table.shm_information[i].used == 0)
+      return i;
+  return NOT_FOUND;
 }
 
 int
 shm_open(int id, int page_count, int flags) {
-    acquire(&(shm_table.lock));
+  cprintf("shm_open 1\n");
+  acquire(&(shm_table.lock));
 
-    // your code
-
+  cprintf("shm_open 2\n");
+  if(page_count > MAX_PAGE_PER_SHM) {
     release(&(shm_table.lock));
-    return 0; // decide what to return
+    return TOO_MANY_PAGE_REQUESTED;
+  }
+
+  cprintf("shm_open 3\n");
+  if(IS_FOUND(find_page(id))) {
+    release(&(shm_table.lock));
+    return ALREADY_OPEN;
+  }
+
+  cprintf("shm_open 4\n");
+  int page = find_free_page(id);
+  shm_table.shm_information[page].used = 1;
+  shm_table.shm_information[page].id = id;
+  shm_table.shm_information[page].owner_pid = myproc()->pid;
+  shm_table.shm_information[page].flags = flags;
+  shm_table.shm_information[page].refcnt = 0;
+  shm_table.shm_information[page].size = page_count;
+
+  cprintf("shm_open 5\n");
+  // from allocuvm;
+  for(int i = 0; i < page_count; i++) {
+    char* mem = kalloc();
+    memset(mem, 0, 4096);
+    shm_table.shm_information[page].frame[i] = mem;
+
+    if(mem == 0){
+      cprintf("allocuvm out of memory\n");
+//            deallocuvm(pgdir, newsz, oldsz);
+      release(&(shm_table.lock));
+      return BAD_ALLOC;
+    }
+  }
+
+  release(&(shm_table.lock));
+  return SUCCESS;
+}
+
+int
+shm_attach(int id) {
+  acquire(&(shm_table.lock));
+
+  int shm_address = myproc()->sz;
+
+  if(!IS_FOUND(find_page(id))) {
+    release(&(shm_table.lock));
+    return NOT_FOUND;
+  }
+
+  int page = find_page(id);
+
+  if(shm_table.shm_information[page].used != 1) {
+    release(&(shm_table.lock));
+    return ACCESS_DENIED;
+  }
+
+  shm_table.shm_information[page].refcnt += 1;
+  for(int i = 0; i < shm_table.shm_information[page].size; i++) {
+    char* mem = shm_table.shm_information[page].frame[i];
+
+    if(mappages(myproc()->pgdir, (void*)myproc()->sz, 4096, V2P(mem), PTE_W|PTE_U) < 0){
+//            cprintf("allocuvm out of memory (2)\n");
+//            deallocuvm(pgdir, newsz, oldsz);
+//            kfree(mem);
+      return BAD_ALLOC;
+    }
+
+//        myproc()->sz += 4096;
+  }
+
+  release(&(shm_table.lock));
+  return shm_address;
 }
 
 int
 shm_close(int id) {
-    acquire(&(shm_table.lock));
+  acquire(&(shm_table.lock));
 
-    // your code
 
-    release(&(shm_table.lock));
-    return 0; // decide what to return
+  // your code
+
+  release(&(shm_table.lock));
+  return 0; // decide what to return
 }
 
-/////////////////////////////////
+//////////////////////////////////////////
+
 
 extern char data[];  // defined by kernel.ld
 pde_t *kpgdir;  // for use in scheduler()
